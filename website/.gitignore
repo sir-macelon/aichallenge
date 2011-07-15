@@ -1,0 +1,12 @@
+server_info.php
+*.log
+aicontest.tgz
+worker-src.tgz
+server_message.html
+
+ants/
+visualizer/
+aichallenge.wiki/
+forums/
+phpMyAdmin/
+starter_packages/
