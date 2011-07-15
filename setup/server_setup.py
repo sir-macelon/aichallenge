@@ -27,7 +27,7 @@ def install_manager_packages():
 def install_website_packages():
     """ Install system packages required for the website """
     pkg_list = ["apache2", "php5", "libapache2-mod-php5", "php5-mysql",
-            "memcached", "php5-memcache", "libphp-phpmailer", "zip",
+            "memcached", "php5-memcache", "php5-curl", "zip",
             "cvs", "openjdk-6-jdk", "ant", "icedtea-plugin", "markdown"]
     install_apt_packages(pkg_list)
 
@@ -42,16 +42,12 @@ def setup_base_files(opts):
         run_cmd("chown {0}:www-data {1}".format(opts.username, opts.map_dir))
     if not os.path.exists(opts.replay_dir):
         os.mkdir(opts.replay_dir)
-        run_cmd("chown {0}:{0} {1}".format(opts.username, opts.replay_dir))
+        run_cmd("chown {0}:www-data {1}".format(opts.username, opts.replay_dir))
         os.chmod(opts.replay_dir, 0775)
     if not os.path.exists(opts.log_dir):
         os.mkdir(opts.log_dir)
         run_cmd("chown {0}:www-data {1}".format(opts.username, opts.log_dir))
         os.chmod(opts.log_dir, 0775)
-    if opts.enable_email:
-        reply_email = "donotreply@" + opts.website_hostname
-    else:
-        reply_email = "donotsend"
     si_filename = os.path.join(TEMPLATE_DIR, "server_info.py.template")
     with open(si_filename, 'r') as si_file:
         si_template = si_file.read()
@@ -60,7 +56,6 @@ def setup_base_files(opts):
             database_password=opts.database_password,
             database_name=opts.database_name,
             map_dir=opts.map_dir, upload_dir=opts.upload_dir,
-            reply_email=reply_email,
             log_dir=opts.log_dir)
     manager_dir = os.path.join(opts.local_repo, "manager")
     with CD(manager_dir):
@@ -117,10 +112,6 @@ def setup_database(opts):
 def setup_website(opts):
     """ Configure apache to serve the website and set a server_info.php """
     website_root = os.path.join(opts.local_repo, "website")
-    if opts.enable_email:
-        reply_email = "donotreply@" + opts.website_hostname
-    else:
-        reply_email = "donotsend"
     si_filename = os.path.join(TEMPLATE_DIR, "server_info.php.template")
     with open(si_filename, 'r') as si_file:
         si_template = si_file.read()
@@ -130,7 +121,7 @@ def setup_website(opts):
             database_user=opts.database_user,
             database_password=opts.database_password,
             database_name=opts.database_name,
-            reply_email=reply_email
+            api_url=opts.website_hostname
             )
     with CD(website_root):
         if not os.path.exists("server_info.php"):
@@ -139,11 +130,9 @@ def setup_website(opts):
         if not os.path.exists("aichallenge.wiki"):
             run_cmd("git clone git://github.com/aichallenge/aichallenge.wiki.git")
             run_cmd("python setup.py")
-    if not os.path.exists(os.path.join(website_root, "starter_packages")):
-        os.mkdir(os.path.join(website_root, "starter_packages"))
-        with CD(os.path.join(opts.local_repo, "ants/dist/starter_bots")):
-            run_cmd("make")
-            run_cmd("make install")
+    with CD(os.path.join(opts.local_repo, "ants/dist/starter_bots")):
+        run_cmd("make")
+        run_cmd("make install")
     if not os.path.exists(os.path.join(website_root, "worker-src.tgz")):
         create_worker_archive.main(website_root)
     visualizer_path = os.path.join(opts.local_repo, "ants/visualizer")
@@ -171,8 +160,9 @@ def setup_website(opts):
         if os.path.exists(enabled_link):
             os.remove(enabled_link)
         os.symlink(site_config, enabled_link)
-        run_cmd("a2enmod rewrite") # FIXME: ubuntu specific
+        run_cmd("a2enmod rewrite")
         run_cmd("/etc/init.d/apache2 restart")
+    run_cmd("chown -R {0}:{0} {1}".format(opts.username, website_root))
 
 def interactive_options(options):
     print "Warning: This script is meant to be run as root and will make changes to the configuration of the machine it is run on."
@@ -213,9 +203,6 @@ def interactive_options(options):
     webname = options.website_hostname
     webname = raw_input("Website hostname? [%s] " % (webname,))
     options.website_hostname = webname if webname else options.website_hostname
-    enable_email = options.enable_email
-    enable_email = get_choice("Enable email?", enable_email)
-    options.enable_email = enable_email
     default = options.website_as_default
     default = get_choice("Make contest site the default website?", default)
     options.website_as_default = default
@@ -248,7 +235,6 @@ def get_options(argv):
         "website_as_default": False,
         "website_hostname": '.'.join(getfqdn().split('.')[1:]),
         "interactive": True,
-        "enable_email": True
     }
     full_install = {
         "website_as_default": True,
@@ -297,4 +283,3 @@ if __name__ == "__main__":
         main(sys.argv)
     except KeyboardInterrupt:
         print('Setup Aborted')
-

@@ -18,7 +18,7 @@ TEMPLATE_DIR = os.path.dirname(os.path.abspath(__file__))
 def install_required_packages():
     """ This installs the packages that are required to run the worker scripts
     """
-    pkg_list = ["curl", "unzip"]
+    pkg_list = ["curl", "unzip", "python-software-properties"]
     install_apt_packages(pkg_list)
 
 def install_utility_packages():
@@ -30,60 +30,45 @@ def install_utility_packages():
 def install_basic_languages():
     """ Install base set of submission languages,
         currently C, C++, Java and Python """
-    pkg_list = ["gcc", "g++", "openjdk-6-jdk", "python-dev"]
+    pkg_list = ["gcc", "g++", "openjdk-6-jdk", "python-dev", "python3-dev"]
     install_apt_packages(pkg_list)
 
-def install_extra_packaged_languages():
+def install_extra_distribution_languages():
     """ Install all extra languages that are part of the Ubuntu distribution
         and don't require any special installation steps """
-    pkg_list = ["ruby1.9.1", "php5-cli", "perl", "ocaml",
+    pkg_list = ["ruby1.9.1", "php5-cli", "perl", "ocaml", "luajit", "ghc",
             "common-lisp-controller", "sbcl", "mono-2.0-devel"]
-    # "haskell-platform" should be added for the haskell language, but the
-    # package is currently broken in ubuntu natty
     install_apt_packages(pkg_list)
     if not os.path.exists("/usr/bin/ruby"):
         os.symlink("/usr/bin/ruby1.9.1", "/usr/bin/ruby")
 
 def install_golang():
-    """ Install golang from a mercurial release """
-    RELEASE_TAG = "release.r56"
-    if os.path.exists("/usr/local/bin/godoc"):
-        return
-    pkg_list = ["bison", "ed", "gawk", "libc6-dev", "make",
-            "python-setuptools", "build-essential", "mercurial"]
-    install_apt_packages(pkg_list)
-    try:
-        os.makedirs("/usr/local/src")
-    except OSError:
-        pass
-    with CD("/usr/local/src"):
-        run_cmd("hg clone -r %s https://go.googlecode.com/hg/ go"
-            % (RELEASE_TAG,))
-    append_line("/root/.bashrc", "export GOROOT=/usr/local/src/go")
-    append_line("/root/.bashrc", "export GOBIN=/usr/local/bin")
-    with CD("/usr/local/src/go/src"):
-        run_cmd("export GOBIN=/usr/local/bin; ./all.bash")
+    """ Install golang """
+    run_cmd("add-apt-repository ppa:gophers/go")
+    run_cmd("apt-get update")
+    install_apt_packages(['golang'])
 
 def install_nodejs():
     """ Install node.js """
-    if os.path.exists("/usr/local/bin/node"):
-        return
-    install_apt_packages("make")
-    try:
-        os.makedirs("/usr/local/src/nodejs")
-    except OSError:
-        pass
-    with CD("/usr/local/src/nodejs"):
-        run_cmd("curl 'http://nodejs.org/dist/node-v0.4.1.tar.gz' | tar -xz")
-    with CD("/usr/local/src/nodejs/node-v0.4.1"):
-        run_cmd("./configure")
-        run_cmd("make")
-        run_cmd("make install")
-        
+    run_cmd("add-apt-repository ppa:jerome-etienne/neoip")
+    run_cmd("apt-get update")
+    install_apt_packages(['nodejs'])
+
 def install_coffeescript():
     """ Install coffeescript """
-    run_cmd("curl http://npmjs.org/install.sh | sudo sh")
+    if os.path.exists("/usr/local/bin/coffee"):
+        return
+    run_cmd("curl http://npmjs.org/install.sh | clean=no sh")
     run_cmd("npm install -g coffee-script")
+
+def install_clojure():
+    """ Install the Clojure language """
+    if os.path.exists("/usr/share/java/clojure.jar"):
+        return
+    with CD("/root"):
+        run_cmd("curl 'http://cloud.github.com/downloads/clojure/clojure/clojure-1.2.0.zip' > clojure-1.2.0.zip")
+        run_cmd("unzip clojure-1.2.0.zip")
+        run_cmd("cp clojure-1.2.0/clojure.jar /usr/share/java")
 
 def install_groovy():
     """ Install the Groovy language """
@@ -98,8 +83,8 @@ def install_scala():
     if os.path.exists("/usr/bin/scala"):
         return
     with CD("/root"):
-        run_cmd("curl 'http://www.scala-lang.org/downloads/distrib/files/scala-2.8.1.final.tgz' | tar xz")
-        os.rename("scala-2.8.1.final", "/usr/share/scala")
+        run_cmd("curl 'http://www.scala-lang.org/downloads/distrib/files/scala-2.9.0.1.tgz' | tar xz")
+        os.rename("scala-2.9.0.1", "/usr/share/scala")
         os.symlink("/usr/share/scala/bin/scala", "/usr/bin/scala")
         os.symlink("/usr/share/scala/bin/scalac", "/usr/bin/scalac")
 
@@ -112,15 +97,26 @@ def install_dmd():
         run_cmd("curl 'http://ftp.digitalmars.com/dmd_2.053-0_amd64.deb' > dmd_2.053-0_amd64.deb")
         run_cmd("dpkg -i dmd_2.053-0_amd64.deb")
 
-def install_all_languages():
+def install_packaged_languages():
     install_basic_languages()
-    install_extra_packaged_languages()
+    install_extra_distribution_languages()
     install_golang()
     install_nodejs()
-    #install_coffeescript()
+
+def install_all_languages():
+    install_basic_languages()
+    install_extra_distribution_languages()
+    install_golang()
+    install_nodejs()
+    install_coffeescript()
+    install_clojure()
     install_groovy()
     install_scala()
     install_dmd()
+
+def install_jailguard(options):
+    worker_dir = os.path.join(options.local_repo, "worker")
+    run_cmd("cp %s/jailguard.py /usr/local/bin/" % (worker_dir,))
 
 def setup_contest_files(options):
     """ Setup all the contest specific files and directories """
@@ -134,6 +130,9 @@ def setup_contest_files(options):
     if not os.path.exists(map_dir):
         os.mkdir(map_dir)
         run_cmd("chown {0}: {1}".format(options.username, map_dir))
+    if not os.path.exists(options.log_dir):
+        os.mkdir(options.log_dir)
+        run_cmd("chown {0}: {1}".format(options.username, options.log_dir))
     worker_dir = os.path.join(contest_root, local_repo, "worker")
     si_filename = os.path.join(TEMPLATE_DIR, "worker_server_info.py.template")
     with open(si_filename, 'r') as si_file:
@@ -155,32 +154,23 @@ def setup_base_chroot(options):
     install_apt_packages(["debootstrap", "schroot", "unionfs-fuse", "gcc"])
     chroot_dir = "/srv/chroot"
     base_chroot_dir = os.path.join(chroot_dir, "aic-base")
-    if os.path.exists(base_chroot_dir):
-        return
-    os.makedirs(base_chroot_dir)
-    run_cmd("debootstrap --variant=buildd --arch %s natty \
-            %s http://us.archive.ubuntu.com/ubuntu/" % (options.arch, base_chroot_dir,))
-    with CD(TEMPLATE_DIR):
-        run_cmd("cp chroot_configs/chroot.d/aic-base /etc/schroot/chroot.d/")
-        run_cmd("cp chroot_configs/sources.list %s/etc/apt/"
-                % (base_chroot_dir,))
-        run_cmd("cp -r chroot_configs/ai-jail /etc/schroot/ai-jail")
-    deb_archives = "/var/cache/apt/archives/"
-    run_cmd("cp {0}*.deb {1}{0}".format(deb_archives, base_chroot_dir))
-    run_cmd("schroot -c aic-base -- /bin/sh -c \"DEBIANFRONTEND=noninteractive;\
-            apt-get update; apt-get upgrade -y\"")
-    run_cmd("schroot -c aic-base -- apt-get install -y python")
-    run_cmd("schroot -c aic-base -- %s/setup/worker_setup.py --chroot-setup"
+    if not os.path.exists(base_chroot_dir):
+        os.makedirs(base_chroot_dir)
+        run_cmd("debootstrap --variant=buildd --arch %s natty \
+                %s http://us.archive.ubuntu.com/ubuntu/" % (options.arch, base_chroot_dir,))
+        with CD(TEMPLATE_DIR):
+            run_cmd("cp chroot_configs/chroot.d/aic-base /etc/schroot/chroot.d/")
+            run_cmd("cp chroot_configs/sources.list %s/etc/apt/"
+                    % (base_chroot_dir,))
+            run_cmd("cp -r chroot_configs/ai-jail /etc/schroot/ai-jail")
+        deb_archives = "/var/cache/apt/archives/"
+        run_cmd("cp {0}*.deb {1}{0}".format(deb_archives, base_chroot_dir))
+        run_cmd("schroot -c aic-base -- /bin/sh -c \"\
+                DEBIANFRONTEND=noninteractive;\
+                apt-get update; apt-get upgrade -y\"")
+        run_cmd("schroot -c aic-base -- apt-get install -y python")
+    run_cmd("schroot -c aic-base -- %s/setup/worker_setup.py --chroot-base"
             % (os.path.join(options.root_dir, options.local_repo),))
-    worker_dir = os.path.join(options.root_dir, options.local_repo, "worker")
-    with CD(worker_dir):
-        user_info = pwd.getpwnam(options.username)
-        cuid = user_info.pw_uid
-        cgid = user_info.pw_gid
-        jgid = grp.getgrnam("jailusers").gr_gid
-        run_cmd("gcc -DCONTEST_UID=%d -DCONTEST_GID=%d -DJAIL_GID=%d jail_own.c -o jail_own" % (cuid, cgid, jgid))
-        run_cmd("chown root:%s jail_own" % (cgid,))
-        run_cmd("chmod u=rwxs,g=rwx,o= jail_own")
 
 def create_jail_group(options):
     """ Create user group for jail users and set limits on it """
@@ -192,9 +182,9 @@ def create_jail_group(options):
     if not file_contains(limits_conf, "@jailusers"):
         # limit jailuser processes to:
         # 10 processes or system threads
-        append_line(limits_conf, "@jailusers hard nproc 15 # ai-contest")
+        append_line(limits_conf, "@jailusers hard nproc 20 # ai-contest")
         # 20 minutes of cpu time
-        append_line(limits_conf, "@jailusers hard cpu 20 # ai-contest")
+        append_line(limits_conf, "@jailusers hard cpu 35 # ai-contest")
         # slightly more than 1GB of ram
         append_line(limits_conf, "@jailusers hard rss 1048600 # ai-contest")
     if not file_contains("/etc/sudoers",
@@ -241,15 +231,28 @@ iptables-restore < /etc/iptables.rules
 exit 0
 """
 
-def setup_jailusers(options):
-    """ Create and configure the jail users """
+def setup_base_jail(options):
+    """ Create and configure base jail """
+    run_cmd("schroot -c aic-base -- %s/setup/worker_setup.py --chroot-setup"
+            % (os.path.join(options.root_dir, options.local_repo),))
     create_jail_group(options)
     iptablesload_path = "/etc/network/if-pre-up.d/iptablesload"
     if not os.path.exists(iptablesload_path):
         with open(iptablesload_path, "w") as loadfile:
             loadfile.write(IPTABLES_LOAD)
         os.chmod(iptablesload_path, 0744)
-    setup_base_chroot(options)
+    worker_dir = os.path.join(options.root_dir, options.local_repo, "worker")
+    with CD(worker_dir):
+        user_info = pwd.getpwnam(options.username)
+        cuid = user_info.pw_uid
+        cgid = user_info.pw_gid
+        jgid = grp.getgrnam("jailusers").gr_gid
+        run_cmd("gcc -DCONTEST_UID=%d -DCONTEST_GID=%d -DJAIL_GID=%d jail_own.c -o jail_own" % (cuid, cgid, jgid))
+        run_cmd("chown root:%s jail_own" % (cgid,))
+        run_cmd("chmod u=rwxs,g=rwx,o= jail_own")
+
+def setup_jailusers(options):
+    """ Create and configure the jail users """
     for user_num in range(1, 33):
         create_jail_user("jailuser%s" % (user_num,))
     run_cmd("iptables-save > /etc/iptables.rules")
@@ -263,8 +266,9 @@ def interactive_options(options):
     options.update_system = get_choice(
             "Update and upgrade system before rest of setup?",
             options.update_system)
+    options.create_jails = get_choice("Create bot jails?", options.create_jails)
     pkg_only = get_choice(
-            "Only install packages, do no additional setup?",
+            "Only install packages and base jail, do no additional setup?",
             options.packages_only)
     options.packages_only = pkg_only
     if pkg_only:
@@ -280,7 +284,6 @@ def interactive_options(options):
     repo_dir = raw_input("Directory of source repository? [%s] " % (repo_dir,))
     options.local_repo = repo_dir if repo_dir else options.local_repo
     base_url = options.api_url
-    options.create_jails = get_choice("Create bot jails?", options.create_jails)
     base_url = raw_input("API Base url? [%s] " % (base_url,))
     options.api_url = base_url if base_url else options.api_url
     api_key = options.api_key
@@ -307,6 +310,8 @@ def get_options(argv):
         "install_required": True,
         "install_utilities": True,
         "install_languages": False,
+        "install_pkg_languages": False,
+        "install_jailguard": False,
         "packages_only": False,
         "username": current_username,
         "root_dir": root_dir,
@@ -317,16 +322,27 @@ def get_options(argv):
         "log_dir": log_dir,
         "local_repo": top_level,
         "create_jails": True,
-        "api_url":  '.'.join(getfqdn().split('.')[1:]),
+        "api_url":  "http://"+ '.'.join(getfqdn().split('.')[1:]) +"/",
         "api_key": "",
         "install_cronjob": False,
         "run_worker": False,
         "interactive": True,
         }
 
+    chroot_base = {
+        "install_utilities": False,
+        "install_pkg_languages": True,
+        "install_languages": False,
+        "install_jailguard": False,
+        "create_jails": False,
+        "packages_only": True,
+        "interactive": False,
+        }
     chroot_setup = {
         "install_utilities": False,
         "install_languages": True,
+        "install_jailguard": True,
+        "create_jails": False,
         "packages_only": True,
         "interactive": False,
         }
@@ -359,6 +375,9 @@ def get_options(argv):
     parser.add_option("--chroot-setup", action="callback",
             callback=replace_options, callback_args=(chroot_setup,),
             help=SUPPRESS_HELP)
+    parser.add_option("--chroot-base", action="callback",
+            callback=replace_options, callback_args=(chroot_base,),
+            help=SUPPRESS_HELP)
     options, args = parser.parse_args(argv)
     if options.interactive:
         interactive_options(options)
@@ -380,22 +399,29 @@ def main(argv=["worker_setup.py"]):
             install_required_packages()
         if opts.install_utilities:
             install_utility_packages()
+        if opts.install_pkg_languages:
+            install_packaged_languages()
         if opts.install_languages:
             install_all_languages()
+    if opts.install_jailguard:
+        install_jailguard(opts)
+    if opts.create_jails:
+        setup_base_chroot(opts)
     if opts.packages_only:
         return
     setup_contest_files(opts)
     if opts.create_jails:
+        setup_base_jail(opts)
         setup_jailusers(opts)
     start_script = os.path.join(opts.root_dir, opts.local_repo,
             "worker/start_worker.sh")
     if opts.install_cronjob:
-        cron_file = "/etc/cron.d/" + opts.api_url
+        cron_file = "/etc/cron.d/ai-contest"
         if not file_contains(cron_file, start_script):
-            append_line(cron_file, "@reboot root %s" % (start_script,))
+            append_line(cron_file, "@reboot %s %s"
+                    % (opts.username, start_script,))
     if opts.run_worker:
-        run_cmd(start_script)
+        run_cmd("sudo -u %s %s" % (opts.username, start_script))
 
 if __name__ == "__main__":
     main(sys.argv)
-

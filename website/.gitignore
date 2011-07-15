@@ -3,10 +3,11 @@ server_info.php
 aicontest.tgz
 worker-src.tgz
 server_message.html
+ai-contest.css
 
 ants/
+maps/
 visualizer/
 aichallenge.wiki/
 forums/
 phpMyAdmin/
-starter_packages/

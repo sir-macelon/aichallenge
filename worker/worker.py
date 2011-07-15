@@ -13,7 +13,7 @@ import stat
 import platform
 import traceback
 import tempfile
-from copy import copy
+from copy import copy, deepcopy
 
 from optparse import OptionParser
 
@@ -25,7 +25,7 @@ from engine import run_game
 # Set up logging
 log = logging.getLogger('worker')
 log.setLevel(logging.INFO)
-log_file = os.path.join(server_info['logs_path'], 'worker.log')
+log_file = os.path.join(server_info.get('logs_path', '.'), 'worker.log')
 handler = logging.handlers.RotatingFileHandler(log_file,
                                                maxBytes=10000000,
                                                backupCount=5)
@@ -52,7 +52,7 @@ STATUS_COMPILE_ERROR = 70
 STATUS_TEST_ERROR = 80
 
 # get game from ants dir
-sys.path.append(os.path.join(server_info['repo_path'], 'ants'))
+sys.path.append(os.path.join(server_info.get('repo_path', '..'), 'ants'))
 from ants import Ants
 
 class CD(object):
@@ -135,33 +135,54 @@ class GameAPIClient:
             return None
 
     def post_result(self, method, result):
+        # save result in case of failure
+        with open('last_game.json', 'w') as f:
+            f.write(json.dumps(result))
         # retry 10 times or until post is successful
-        retry = 1
+        retry = 100
+        wait_time = 2
         for i in range(retry):
-            url = self.get_url(method)
-            log.info(url)
-            json_data = json.dumps(result)
-            hash = md5(json_data).hexdigest()
-            log.debug("Posting result %s: %s" % (method, json_data))
-            log.info("Posting hash: %s" % hash)
-            response = urllib.urlopen(url, json.dumps(result))
-            if response.getcode() == 200:
-                data = response.read()
-                try:
-                    log.debug(data.strip())
-                    data = json.loads(data)["hash"]
-                    log.info("Server returned hash: %s" % data)
-                    if hash == data:
-                        break
-                    elif i < retry-1:
-                        time.sleep(5)
-                except ValueError:
-                    log.info("Bad json from server during post result: %s" % data)
-                    if i < retry-1:
-                        time.sleep(5)
-            else:
-                log.warning("Server did not receive post: %s, %s" % (response.getcode(), response.read()))
-                time.sleep(5)
+            wait_time = min(wait_time * 2, 300)
+            try:
+                url = self.get_url(method)
+                log.info(url)
+                if i == 0:
+                    json_log = deepcopy(result)
+                    if 'replaydata' in json_log:
+                        del json_log['replaydata']
+                    json_log = json.dumps(json_log)
+                    log.debug("Posting result %s: %s" % (method, json_log))
+                else:
+                    log.warning("Posting attempt %s" % (i+1))
+                json_data = json.dumps(result)
+                hash = md5(json_data).hexdigest()
+                if i == 0:
+                    log.info("Posting hash: %s" % hash)
+                response = urllib.urlopen(url, json.dumps(result))
+                if response.getcode() == 200:
+                    data = response.read()
+                    try:
+                        log.debug(data.strip())
+                        data = json.loads(data)["hash"]
+                        log.info("Server returned hash: %s" % data)
+                        if hash == data:
+                            os.remove('last_game.json')
+                            break
+                        elif i < retry-1:
+                            log.warning('Waiting %s seconds...' % wait_time)
+                            time.sleep(wait_time)
+                    except ValueError:
+                        log.warning("Bad json from server during post result: %s" % data)
+                        if i < retry-1:
+                            log.warning('Waiting %s seconds...' % wait_time)
+                            time.sleep(wait_time)
+                else:
+                    log.warning("Server did not receive post: %s, %s" % (response.getcode(), response.read()))
+                    time.sleep(wait_time)
+            except IOError as e:
+                log.error(traceback.format_exc())
+                log.warning('Waiting %s seconds...' % wait_time)
+                time.sleep(wait_time)
         else:
             return False
         return True
@@ -238,13 +259,21 @@ class Worker:
                 else:
                     zip_files = [
                         ("entry.tar.gz", "mkdir bot; tar xfz entry.tar.gz -C bot > /dev/null 2> /dev/null"),
+                        ("entry.tar.xz", "mkdir bot; tar xfJ entry.tar.xz -C bot > /dev/null 2> /dev/null"),
+                        ("entry.tar.bz2", "mkdir bot; tar xfj entry.tar.bz2 -C bot > /dev/null 2> /dev/null"),
+                        ("entry.txz", "mkdir bot; tar xfJ entry.txz -C bot > /dev/null 2> /dev/null"),
+                        ("entry.tbz", "mkdir bot; tar xfj entry.tbz -C bot > /dev/null 2> /dev/null"),
                         ("entry.tgz", "mkdir bot; tar xfz entry.tgz -C bot > /dev/null 2> /dev/null"),
                         ("entry.zip", "unzip -u -dbot entry.zip > /dev/null 2> /dev/null")
                     ]
                 for file_name, command in zip_files:
                     if os.path.exists(file_name):
-                        log.info("unzip %s, status: %s" % (file_name, os.system(command)))
-                        # check for single directory only and move everything down
+                        exit_status = os.system(command)
+                        log.info("unzip %s, status: %s"
+                                % (file_name, exit_status))
+                        if exit_status != 0:
+                            return False
+                        # check for single directory only and move everything up
                         if len(os.listdir('bot')) == 1:
                             one_path = os.listdir('bot')[0]
                             if os.path.isdir(one_path):
@@ -275,6 +304,12 @@ class Worker:
                 if status != 40:
                     if type(errors) != list:
                         errors = [errors] # for valid json according to php
+                    # get rid of any binary garbage by decoding to UTF-8
+                    for i in range(len(errors)):
+                        try:
+                            errors[i] = errors[i].decode("UTF-8", "replace")
+                        except AttributeError:
+                            pass
                     result['errors'] = json.dumps(errors)
                 return self.cloud.post_result('api_compile_result', result)
             else:
@@ -318,7 +353,16 @@ class Worker:
                         return False
             log.info("Compiling %s " % submission_id)
             bot_dir = os.path.join(download_dir, 'bot')
-            detected_lang, errors = compiler.compile_anything(bot_dir)
+            timelimit = 10 * 60 # 10 minute limit to compile submission
+            if not run_test:
+                # give it 50% more time if this isn't the initial compilation
+                # this is to try and prevent the situation where the initial
+                # compilation just makes it in the time limit and then a
+                # subsequent compilation fails when another worker goes to
+                # play a game with it
+                timelimit += timelimit * 0.5
+            detected_lang, errors = compiler.compile_anything(bot_dir,
+                    timelimit)
             if errors != None:
                 log.info(errors)
                 if not self.debug:
@@ -405,17 +449,18 @@ class Worker:
             # options['input_logs'] = [sys.stdout, sys.stdout]
         result = run_game(game, bots, options)
         if 'status' in result:
+            if result['status'][1] in ('crashed', 'timeout', 'invalid'):
+                msg = 'TestBot is not operational\n' + str(result['errors'][1])
+                log.error(msg)
+                return msg
             log.info(result['status'][0]) # player 0 is the bot we are testing
+            if result['status'][0] in ('crashed', 'timeout', 'invalid'):
+                log.info(str(result['errors'][0]))
+                return result['errors'][0]
         elif 'error' in result:
-            log.info(result['error']);
-            raise Exception('Engine failure')
-        if 'errors' in result:
-            log.info(result['errors'][0])
-
-        if result['status'][1] in ('crashed', 'timeout', 'invalid'):
-            raise Exception('TestBot is not operational')
-        if result['status'][0] in ('crashed', 'timeout', 'invalid'):
-            return result['errors'][0]
+            msg = 'Function Test failure: ' + str(result['error'])
+            log.error(msg)
+            return msg
         return None
 
     def game(self, task, report_status=False):
@@ -423,9 +468,10 @@ class Worker:
         try:
             matchup_id = int(task["matchup_id"])
             log.info("Running game %s..." % matchup_id)
-            if 'options' in task:
-                options = task["options"]
-            else:
+            options = None
+            if 'game_options' in task:
+                options = task["game_options"]
+            if options == None:
                 options = copy(server_info["game_options"])
             options["map"] = self.get_map(task['map_filename'])
             options["output_json"] = True
@@ -448,27 +494,32 @@ class Worker:
             # set worker debug logging
             if self.debug:
                 options['verbose_log'] = sys.stdout
+                replay_log = open('replay.json', 'w')
+                options['replay_log'] = replay_log
                 #options['stream_log'] = sys.stdout
                 options['error_logs'] = [sys.stderr for _ in range(len(bots))]
                 # options['output_logs'] = [sys.stdout, sys.stdout]
                 # options['input_logs'] = [sys.stdout, sys.stdout]
             options['capture_errors'] = True
             result = run_game(game, bots, options)
+            if self.debug:
+                replay_log.close()
             log.debug(result)
             if 'game_id' in result:
                 del result['game_id']
             result['matchup_id'] = matchup_id
             result['post_id'] = self.post_id
             if report_status:
-                self.cloud.post_result('api_game_result', result)
+                return self.cloud.post_result('api_game_result', result)
         except Exception as ex:
             log.debug(traceback.format_exc())
             result = {"post_id": self.post_id,
                       "matchup_id": matchup_id,
                       "error": str(ex) }
-            self.cloud.post_result('api_game_result', result)
+            success = self.cloud.post_result('api_game_result', result)
             # cleanup download dirs
             map(self.clean_download, map(int, task['submissions']))
+            return success
 
     def task(self, last=False):
         task = self.cloud.get_task()
@@ -480,11 +531,13 @@ class Worker:
                     try:
                         if not self.compile(submission_id, True):
                             self.clean_download(submission_id)
+                        return True
                     except Exception:
                         log.error(traceback.format_exc())
                         self.clean_download(submission_id)
+                        return False
                 elif task['task'] == 'game':
-                    self.game(task, True)
+                    return self.game(task, True)
                 else:
                     if not last:
                         time.sleep(20)
@@ -556,11 +609,26 @@ def main(argv):
 
     # get tasks
     if opts.task:
+        if os.path.exists('last_game.json'):
+            log.warning("Last game result was not send successfully, resending....")
+            result = None
+            with open('last_game.json') as f:
+                try:
+                    result = json.loads(f.read())
+                except:
+                    log.warning("Last game result file can't be read")
+            if result != None:
+                if not worker.cloud.post_result('api_game_result', result):
+                    return False
+            else:
+                os.remove('last_game.json')
         if opts.num_tasks <= 0:
             try:
                 while True:
                     log.info("Getting task infinity + 1")
-                    worker.task()
+                    if not worker.task():
+                        log.warning("Task failed, stopping worker")
+                        break
                     print()
             except KeyboardInterrupt:
                 log.info("[Ctrl] + C, Stopping worker")

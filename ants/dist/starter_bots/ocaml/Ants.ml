@@ -2,18 +2,15 @@
 PlanetWars starter package and adapted. If you find any bugs or make 
 any improvements, please post to the forum or upload a fix! *)
 
-(* Uncomment this and the next function to enable logging *)
+let out_chan = stderr (* open_out "mybot_err.log" *);;
 
-(*
-let out_chan = open_out "mybot_err.log";;
-*)
-
-
-(* uncomment the output_string line and comment out the () *)
+(* this previously used Sys.time, but it's wrong in this context
+ *)
+let get_time () = Unix.gettimeofday ();;
 
 let ddebug s = 
-(* output_string out_chan s; flush out_chan *) 
-(* *)  ()  (* *)
+   output_string out_chan s; 
+   flush out_chan
 ;;
 
 type game_setup =
@@ -26,6 +23,7 @@ type game_setup =
    viewradius2 : int;
    attackradius2 : int;
    spawnradius2 : int;
+   player_seed : int;
  }
 ;;
 
@@ -140,6 +138,10 @@ let set_attackradius2 gstate v =
 
 let set_spawnradius2 gstate v = 
    {gstate with setup = {gstate.setup with spawnradius2 = v}}
+;;
+
+let set_player_seed gstate v = 
+   {gstate with setup = {gstate.setup with player_seed = v}}
 ;;
 
 let uncomment s =
@@ -257,13 +259,18 @@ let add_line gstate line =
              | "viewradius2" -> set_viewradius2 gstate v
              | "attackradius2" -> set_attackradius2 gstate v
              | "spawnradius2" -> set_spawnradius2 gstate v
+             | "player_seed" -> set_player_seed gstate v
              | _ -> gstate
         )
         (fun (line : string) ->
+          gstate
+(* swap this for the above line if you want it to fail on bad input
           if line = "" then
             gstate
           else
-            failwith (Printf.sprintf "unable to parse '%s'" line))))
+            failwith (Printf.sprintf "unable to parse '%s'" line)
+*)
+        )))
     (uncomment line)
 
 let update gstate lines =
@@ -275,7 +282,14 @@ let update gstate lines =
    in
    let ugstate =
       List.fold_left add_line cgstate lines 
-   in if ugstate.turn = 0 then initialize_map ugstate
+   in if ugstate.turn = 0 then
+      if ugstate.setup.rows < 0
+      || ugstate.setup.cols < 0 then
+        (
+         ddebug "\nBad setup info! Expect crashes!\n\n";
+         ugstate
+        )
+      else initialize_map ugstate
    else ugstate
 ;;
 
@@ -296,7 +310,7 @@ let read_lines () =
 
 let read gstate =
   let ll = read_lines () in
-  let go_time = Sys.time () in
+  let go_time = get_time () in
   match ll with
   | Some lines -> Some {(update gstate lines) with go_time = go_time}
   | None -> None
@@ -364,8 +378,7 @@ let shorter_dist w p1 p2 =
       (d1 < d2), (min d1 d2)
 ;;
 
-(* I think there's a better way to do this, but I wrote this first and 
-it seems to work, so I don't plan to change it. *)
+(* see distance_and_direction below *)
 let stepdistance_ndirection (rows, cols) (row1, col1) (row2, col2) =
    let row_si, row_dist =
       shorter_dist rows row1 row2
@@ -417,8 +430,8 @@ let distance2 (rows, cols) (src_row, src_col) (dst_row, dst_col) =
 (* distance (not squared) *)
 let distance b p1 p2 = sqrt (float_of_int (distance2 b p1 p2));;
 
-(* returns the two directions you might travel in to get from p1 to 
-p2 ignoring water, with `Stop(s) for none, and the distance *)
+(* returns the distance and the two directions you might travel in to 
+get from p1 to p2 ignoring water, with `Stop(s) for none *)
 let distance_and_direction bounds p1 p2 =
    let d, (r, c) = stepdistance_ndirection bounds p1 p2 in
       d, (sqrt ((fsquare_int r) +. (fsquare_int c)))
@@ -473,7 +486,7 @@ let time_remaining state =
    let turn_time = if state.turn = 0 then (float_of_int state.setup.loadtime)
    else (float_of_int state.setup.turntime) in
       1000. *. 
-      ((turn_time /. 1000.) -. ((Sys.time ()) -. state.go_time))
+      ((turn_time /. 1000.) -. ((get_time ()) -. state.go_time))
 ;;
 
 (* End helper functions *)
@@ -486,12 +499,9 @@ class swrap state =
    method bounds = state.setup.rows, state.setup.cols
    method issue_order (o:order) = issue_order o
    method finish_turn () = finish_turn ()
-   method step_dir (row, col) (d:dir) =
-      step_dir d self#bounds (row, col)
-   method get_tile (row, col) = ((get_tile state.tmap (row, col)): tile)
    method direction p1 p2 = ((direction self#bounds p1 p2): (dir * dir))
-   method step_dir loc dir = step_dir dir self#bounds loc
-   method get_tile loc = get_tile state.tmap loc
+   method step_dir loc (d:dir) = step_dir d self#bounds loc
+   method get_tile loc = ((get_tile state.tmap loc): tile)
    method distance2 p1 p2 = distance2 self#bounds p1 p2
    method distance p1 p2 = distance self#bounds p1 p2
    method distance_and_direction p1 p2 =
@@ -506,20 +516,12 @@ class swrap state =
    method turn = state.turn
    method my_ants = state.my_ants
    method get_map = state.tmap
+   method get_player_seed = state.setup.player_seed
 (*
    More getters to be added as needed
 *)
  end
 ;;
-
-(*
-let rec print_food = function
- | [] -> ()
- | (row, col) :: tail ->
-      ddebug (Printf.sprintf " Food at %d, %d\n" row col);
-      print_food tail
-;;
-*)
 
 (* Main game loop. Bots should define a main function taking a swrap for 
 an argument (see above), and then call loop main_function. See how the 
@@ -540,6 +542,7 @@ let loop engine =
       viewradius2 = -1;
       attackradius2 = -1;
       spawnradius2 = -1;
+      player_seed = 932463947;
      }
   in
   let proto_gstate =
@@ -558,12 +561,6 @@ let loop engine =
   let rec take_turn i gstate =
     match read gstate with
     | Some state ->
-        if not (state.turn = i) then 
-          (
-           ddebug (Printf.sprintf 
-              "Game engine and internal turn count disagree: %d vs %d\n" 
-              state.turn i);
-          );
         begin try 
          (
           wrap#set_state state;
@@ -573,12 +570,8 @@ let loop engine =
         with exc ->
          (
           ddebug (Printf.sprintf 
-             "Ants.loop: Engine raised an exception in turn %d.\n" i);
-(* from Planetwars, I haven't written an equivalent
-            output_game_state stderr state;
-*)
-          ddebug (Printf.sprintf "EXCEPTION:\n  %s\n" 
-             (Printexc.to_string exc));
+             "Exception in turn %d :\n" i);
+          ddebug (Printexc.to_string exc);
           raise exc
          )
         end;

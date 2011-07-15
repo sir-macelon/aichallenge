@@ -12,24 +12,16 @@ CREATE TABLE `game` (
   `game_id` int(11) NOT NULL AUTO_INCREMENT,
   `seed_id` int(11) NOT NULL,
   `map_id` int(11) NOT NULL,
+  `turns` int(11) NOT NULL,
+  `winning_turn` int(11) NOT NULL,
+  `ranking_turn` int(11) NOT NULL,
   `timestamp` datetime NOT NULL,
   `worker_id` int(11) unsigned NOT NULL,
   `replay_path` varchar(255) NULL,
   PRIMARY KEY (`game_id`),
-  KEY `game_seed_id_idx` (`seed_id`),
-  KEY `game_map_id_idx` (`map_id`),
-  KEY `game_seed_map_idx` (`seed_id`,`map_id`)
-);
-
-DROP TABLE IF EXISTS `game_archive`;
-CREATE TABLE `game_archive` (
-  `game_id` int(11) NOT NULL,
-  `seed_id` int(11) NOT NULL,
-  `map_id` int(11) NOT NULL,
-  `timestamp` datetime NOT NULL,
-  `worker_id` int(11) NOT NULL,
-  `replay_path` varchar(255) NOT NULL,
-  UNIQUE KEY `game_id_UNIQUE` (`game_id`)
+  KEY `game_map_id_idx` (`map_id`,`game_id`),
+  KEY `game_seed_map_idx` (`seed_id`,`map_id`,`game_id`),
+  KEY `game_timestamp_idx` (`worker_id`, `timestamp`)
 );
 
 DROP TABLE IF EXISTS `game_player`;
@@ -37,6 +29,7 @@ CREATE TABLE `game_player` (
   `game_id` int(11) NOT NULL,
   `user_id` int(11) NOT NULL,
   `submission_id` int(11) NOT NULL,
+  `rank` int(11) DEFAULT NULL,
   `player_id` int(11) NOT NULL,
   `errors` varchar(1024) DEFAULT NULL,
   `status` varchar(255) DEFAULT NULL,
@@ -49,25 +42,9 @@ CREATE TABLE `game_player` (
   `valid` tinyint(1) NOT NULL DEFAULT '1',
   PRIMARY KEY (`game_id`,`user_id`),
   UNIQUE KEY `game_player_idx` (`game_id`,`submission_id`),
-  KEY `game_user_id_idx` (`user_id`),
-  KEY `game_player_game_id_idx` (`game_id`)
-);
-
-DROP TABLE IF EXISTS `game_player_archive`;
-CREATE TABLE `game_player_archive` (
-  `game_id` int(11) NOT NULL,
-  `user_id` int(11) NOT NULL,
-  `submission_id` int(11) NOT NULL,
-  `player_id` int(11) NOT NULL,
-  `valid` tinyint(1) NOT NULL,
-  `errors` varchar(1024) DEFAULT NULL,
-  `status` varchar(255) DEFAULT NULL,  
-  `rank_before` int(11) NOT NULL,
-  `sigma_before` float NOT NULL,
-  `sigma_after` float NOT NULL,
-  `mu_before` float NOT NULL,
-  `mu_after` float NOT NULL,
-  UNIQUE KEY `game_player_archive_idx` (`game_id`,`submission_id`)
+  KEY `game_player_user_id_idx` (`user_id`, `game_id`),
+  KEY `game_player_submission_id_idx` (`submission_id`, `game_id`),
+  KEY `game_player_game_id_idx` (`game_id`, `user_id`, `player_id`)
 );
 
 DROP TABLE IF EXISTS `language`;
@@ -115,10 +92,12 @@ CREATE TABLE `matchup` (
   `map_id` int(11) NOT NULL,
   `worker_id` int(11) DEFAULT NULL,
   `error` varchar(4000) NULL,
+  `matchup_timestamp` datetime NULL,
+  `deleted` tinyint(1) DEFAULT 0,
   PRIMARY KEY (`matchup_id`),
-  KEY `matchup_seed_id_idx` (`seed_id`),
   KEY `matchup_seed_map_idx` (`seed_id`,`map_id`),
-  KEY `matchup_map_id_idx` (`map_id`)
+  KEY `matchup_map_id_idx` (`map_id`),
+  KEY `matchup_deleted_idx` (`deleted`, `worker_id`)
 );
 
 DROP TABLE IF EXISTS `matchup_player`;
@@ -129,9 +108,11 @@ CREATE TABLE `matchup_player` (
   `player_id` int(11) NOT NULL,
   `mu` float DEFAULT NULL,
   `sigma` float DEFAULT NULL,
+  `deleted` tinyint(1) DEFAULT 0,
   PRIMARY KEY (`matchup_id`,`user_id`),
   UNIQUE KEY `matchup_player_idx` (`matchup_id`,`submission_id`),
-  KEY `matchup_player_user_id_idx` (`user_id`)
+  KEY `matchup_player_user_id_idx` (`user_id`),
+  KEY `matchup_player_player_id_idx` (`matchup_id`, `player_id`)
 );
 
 DROP TABLE IF EXISTS `organization`;
@@ -162,27 +143,6 @@ CREATE TABLE `ranking` (
   KEY `submission_id` (`submission_id`),
   KEY `leaderboard_id` (`leaderboard_id`,`submission_id`,`rank`),
   KEY `leaderboard_user_id` (`leaderboard_id`,`user_id`)
-);
-
-DROP TABLE IF EXISTS `ranking_archive`;
-CREATE TABLE `ranking_archive` (
-  `leaderboard_id` int(11) NOT NULL,
-  `user_id` int(11) NOT NULL,
-  `submission_id` int(11) NOT NULL,
-  `version` int(11) NOT NULL,
-  `seq` int(11) NOT NULL,
-  `rank` int(11) NOT NULL,
-  `rank_change` int(11) NULL,
-  `mu` float NOT NULL,
-  `mu_change` float NULL,
-  `sigma` float NOT NULL,
-  `sigma_change` float NULL,
-  `skill` float NOT NULL,
-  `skill_change` float NULL,
-  `latest` tinyint(4) NOT NULL,
-  `age` time NOT NULL ,
-  KEY `submission_id` (`submission_id`),
-  KEY `leaderboard_id` (`leaderboard_id`,`submission_id`,`rank`)
 );
 
 DROP TABLE IF EXISTS `settings`;
